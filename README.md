@@ -4,6 +4,8 @@
 
 如果遇到问题欢迎提交``issue``！也随时欢迎``Pull Requests``！
 
+[![Channel](https://img.shields.io/badge/Follow-Telegram-blue.svg?logo=telegram)](https://t.me/gki_kernels_xiaoxiaow) [![Coolapk](https://img.shields.io/badge/Follow-Coolapk-3DDC84?style=flat-square&logo=android&logoColor=white)](https://www.coolapk.com/u/24701380)
+
 <img width="250" height="250" alt="image" src="https://github.com/user-attachments/assets/55acad97-8fe6-4de7-b9ce-90da9552a212" />
 
 ## OnePlus 开源地址
