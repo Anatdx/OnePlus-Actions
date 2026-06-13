@@ -21,9 +21,6 @@ on:
       SUSFS:
         required: true
         type: string
-      KPM:
-        required: true
-        type: string
       lz4kd:
         required: true
         type: string
@@ -57,7 +54,6 @@ jobs:
       ANDROID_VERSION: ${{ inputs.ANDROID_VERSION }}
       KERNEL_VERSION: ${{ inputs.KERNEL_VERSION }}
       SUSFS: ${{ inputs.SUSFS }}
-      KPM: ${{ inputs.KPM }}
       lz4kd: ${{ inputs.lz4kd }}
       bbr: ${{ inputs.bbr }}
       bbg: ${{ inputs.bbg }}
