@@ -138,6 +138,15 @@ on:
           - 'On'
           - 'Off'
         default: 'Off'
+
+      CVE_2026_43499:
+        description: "是否应用 CVE-2026-43499 rtmutex 修复补丁"
+        required: true
+        type: choice
+        options:
+          - 'On'
+          - 'Off'
+        default: 'On'
         
 jobs:
   build:
@@ -160,6 +169,9 @@ jobs:
           remove-android: 'true'
           remove-haskell: 'true'
           remove-codeql: 'true'
+
+      - name: "📥 Checkout Builder | 检出构建脚本"
+        uses: actions/checkout@v4
 
       - name: "⚙️ Setup Cache Env | 设置缓存环境"
         run: |
@@ -308,7 +320,6 @@ jobs:
           cp ../kernel_patches/zram_patches/001-lz4.patch ./common/
           cp ../kernel_patches/zram_patches/lz4armv8.S ./common/lib
           cp ../kernel_patches/zram_patches/002-zstd.patch ./common/
-
           if [ "${{ github.event.inputs.UNICODE_BYPASS }}" = "On" ]; then
             if [ "${{ github.event.inputs.KERNEL_VERSION }}" = "6.1" ] || [ "${{ github.event.inputs.KERNEL_VERSION }}" = "6.6" ]; then
               cp ../kernel_patches/common/unicode_bypass_fix_6.1+.patch ./common/unicode_bypass_fix.patch
@@ -335,6 +346,13 @@ jobs:
             cd ../common
           elif [ "${{ github.event.inputs.SUSFS }}" == "Off" ]; then
             cd ./common
+          fi
+
+          if [ "${{ github.event.inputs.CVE_2026_43499 }}" = "On" ]; then
+            echo "🛡️ 正在应用 CVE-2026-43499 rtmutex 修复补丁..."
+            bash "$GITHUB_WORKSPACE/security_patch/apply_cve_2026_43499.sh" "${{ github.event.inputs.KERNEL_VERSION }}" "$GITHUB_WORKSPACE/security_patch"
+          else
+            echo "ℹ️ 跳过 CVE-2026-43499 rtmutex 修复补丁"
           fi
 
           if [ "${{ github.event.inputs.UNICODE_BYPASS }}" = "On" ]; then
