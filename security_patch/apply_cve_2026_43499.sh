@@ -15,11 +15,6 @@ if [ ! -f "$rtmutex_file" ]; then
   exit 1
 fi
 
-if grep -q 'struct task_struct \*waiter_task = waiter->task;' "$rtmutex_file"; then
-  echo "CVE-2026-43499 rtmutex fix already present; skipping."
-  exit 0
-fi
-
 try_apply_patch() {
   local patch_file="$1"
 
@@ -190,28 +185,54 @@ ensure_rtmutex_c99() {
     return 1
   fi
 
-  if grep -q '^CFLAGS_rtmutex\.o .*std=gnu99' "$makefile"; then
+  local objects=(
+    rtmutex.o
+    rtmutex_api.o
+    rwsem.o
+    ww_rt_mutex.o
+    spinlock_rt.o
+  )
+  local additions_file
+  local object
+  local escaped_object
+  additions_file="$(mktemp)"
+
+  for object in "${objects[@]}"; do
+    escaped_object="${object//./\\.}"
+    if ! grep -q "^CFLAGS_REMOVE_${escaped_object} .*std=gnu89" "$makefile"; then
+      echo "CFLAGS_REMOVE_${object} += -std=gnu89" >> "$additions_file"
+    fi
+    if ! grep -q "^CFLAGS_${escaped_object} .*std=gnu99" "$makefile"; then
+      echo "CFLAGS_${object} += -std=gnu99" >> "$additions_file"
+    fi
+  done
+
+  if [ ! -s "$additions_file" ]; then
+    rm -f "$additions_file"
     return 0
   fi
 
-  echo "Forcing rtmutex.o to gnu99 for scoped_guard on 5.x..."
+  echo "Forcing rtmutex include units to gnu99 for scoped_guard on 5.x..."
   local tmp_makefile
   tmp_makefile="$(mktemp)"
-  awk '
-    !done && /^obj-\$\(CONFIG_RT_MUTEXES\).*rtmutex\.o/ {
-      print "CFLAGS_REMOVE_rtmutex.o += -std=gnu89"
-      print "CFLAGS_rtmutex.o += -std=gnu99"
+  awk -v insert_file="$additions_file" '
+    function emit() {
+      while ((getline line < insert_file) > 0)
+        print line
+      close(insert_file)
+    }
+    !done && /^obj-\$\(CONFIG_RT_MUTEXES\).*rtmutex/ {
+      emit()
       done = 1
     }
     { print }
     END {
-      if (!done) {
-        print "CFLAGS_REMOVE_rtmutex.o += -std=gnu89"
-        print "CFLAGS_rtmutex.o += -std=gnu99"
-      }
+      if (!done)
+        emit()
     }
   ' "$makefile" > "$tmp_makefile"
   mv "$tmp_makefile" "$makefile"
+  rm -f "$additions_file"
 }
 
 case "$kernel_version" in
@@ -239,6 +260,14 @@ if [ ! -f "$primary_patch" ]; then
 fi
 
 echo "Applying CVE-2026-43499 rtmutex fix for kernel $kernel_version..."
+
+if grep -q 'struct task_struct \*waiter_task = waiter->task;' "$rtmutex_file"; then
+  echo "CVE-2026-43499 rtmutex fix already present; ensuring helpers/build flags are up to date."
+  ensure_scoped_guard_support
+  ensure_rtmutex_c99
+  exit 0
+fi
+
 ensure_scoped_guard_support
 ensure_rtmutex_c99
 
