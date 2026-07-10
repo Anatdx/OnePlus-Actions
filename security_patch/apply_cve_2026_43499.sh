@@ -17,16 +17,101 @@ fi
 
 try_apply_patch() {
   local patch_file="$1"
+  local log_file
 
-  if patch --dry-run -p1 < "$patch_file" >/tmp/cve-2026-43499.patch.log 2>&1; then
+  log_file="$(mktemp "${TMPDIR:-/tmp}/cve-2026-43499.XXXXXX")"
+
+  if patch --dry-run -p1 < "$patch_file" >"$log_file" 2>&1; then
     patch -p1 < "$patch_file"
-    rm -f /tmp/cve-2026-43499.patch.log
+    rm -f "$log_file"
     return 0
   fi
 
-  cat /tmp/cve-2026-43499.patch.log >&2
-  rm -f /tmp/cve-2026-43499.patch.log
+  cat "$log_file" >&2
+  rm -f "$log_file"
   return 1
+}
+
+replace_proxy_cleanup_condition() {
+  local target=""
+  local candidate
+  local tmp_file
+
+  for candidate in kernel/locking/rtmutex_api.c kernel/locking/rtmutex.c; do
+    if [ -f "$candidate" ] &&
+       grep -q 'ret = __rt_mutex_start_proxy_lock' "$candidate"; then
+      target="$candidate"
+      break
+    fi
+  done
+
+  if [ -z "$target" ]; then
+    echo "ERROR: rt_mutex_start_proxy_lock() implementation not found." >&2
+    return 1
+  fi
+
+  if grep -q 'if (unlikely(ret < 0))' "$target"; then
+    echo "CVE-2026-53163 proxy cleanup fix already present."
+    return 0
+  fi
+
+  tmp_file="$(mktemp)"
+  if ! awk '
+    /ret = __rt_mutex_start_proxy_lock/ { in_proxy_start = 1 }
+    in_proxy_start && /if \(unlikely\(ret\)\)/ {
+      sub(/if \(unlikely\(ret\)\)/, "if (unlikely(ret < 0))")
+      replaced++
+      in_proxy_start = 0
+    }
+    { print }
+    END { if (replaced != 1) exit 42 }
+  ' "$target" > "$tmp_file"; then
+    rm -f "$tmp_file"
+    echo "ERROR: failed to locate the proxy cleanup condition in $target." >&2
+    return 1
+  fi
+
+  mv "$tmp_file" "$target"
+  echo "Applied CVE-2026-53163 proxy cleanup fix to $target."
+}
+
+ensure_remove_waiter_null_guard() {
+  local tmp_file
+
+  if grep -q 'if (!waiter_task) /\* never enqueued \*/' "$rtmutex_file"; then
+    echo "CVE-2026-53163 remove_waiter() NULL guard already present."
+    return 0
+  fi
+
+  tmp_file="$(mktemp)"
+  if ! awk '
+    /^static .*remove_waiter\(/ { in_remove_waiter = 1 }
+    {
+      print
+      if (in_remove_waiter && /lockdep_assert_held\(&lock->wait_lock\);/) {
+        match($0, /^[[:space:]]*/)
+        indent = substr($0, RSTART, RLENGTH)
+        print ""
+        print indent "if (!waiter_task) /* never enqueued */"
+        print indent "\treturn;"
+        inserted++
+        in_remove_waiter = 0
+      }
+    }
+    END { if (inserted != 1) exit 42 }
+  ' "$rtmutex_file" > "$tmp_file"; then
+    rm -f "$tmp_file"
+    echo "ERROR: failed to locate remove_waiter() in $rtmutex_file." >&2
+    return 1
+  fi
+
+  mv "$tmp_file" "$rtmutex_file"
+  echo "Applied CVE-2026-53163 remove_waiter() NULL guard."
+}
+
+ensure_followup_fixes() {
+  ensure_remove_waiter_null_guard
+  replace_proxy_cleanup_condition
 }
 
 append_file() {
@@ -259,12 +344,16 @@ if [ ! -f "$primary_patch" ]; then
   exit 1
 fi
 
-echo "Applying CVE-2026-43499 rtmutex fix for kernel $kernel_version..."
+echo "Applying the CVE-2026-43499 rtmutex fix chain for kernel $kernel_version..."
 
 if grep -q 'struct task_struct \*waiter_task = waiter->task;' "$rtmutex_file"; then
-  echo "CVE-2026-43499 rtmutex fix already present; ensuring helpers/build flags are up to date."
-  ensure_scoped_guard_support
-  ensure_rtmutex_c99
+  echo "CVE-2026-43499 rtmutex fix already present."
+  if grep -q 'scoped_guard(raw_spinlock' "$rtmutex_file"; then
+    ensure_scoped_guard_support
+    ensure_rtmutex_c99
+  fi
+  ensure_followup_fixes
+  echo "CVE-2026-43499/CVE-2026-53163 fix chain is complete."
   exit 0
 fi
 
@@ -273,6 +362,8 @@ ensure_rtmutex_c99
 
 if try_apply_patch "$primary_patch"; then
   echo "CVE-2026-43499 rtmutex fix applied."
+  ensure_followup_fixes
+  echo "CVE-2026-43499/CVE-2026-53163 fix chain is complete."
   exit 0
 fi
 
@@ -280,6 +371,8 @@ if [ -n "${fallback_patch:-}" ] && [ -f "$fallback_patch" ]; then
   echo "Primary patch did not match; trying fallback shape: $(basename "$fallback_patch")"
   if try_apply_patch "$fallback_patch"; then
     echo "CVE-2026-43499 rtmutex fix applied with fallback patch."
+    ensure_followup_fixes
+    echo "CVE-2026-43499/CVE-2026-53163 fix chain is complete."
     exit 0
   fi
 fi
